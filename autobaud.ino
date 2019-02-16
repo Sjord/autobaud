@@ -9,11 +9,12 @@
 
 // Input: Pin D8 
 
-volatile boolean first;
-volatile boolean triggered;
+volatile boolean fallingEdge;
+volatile unsigned long pulseCount;
 volatile unsigned long overflowCount;
 volatile unsigned long startTime;
 volatile unsigned long finishTime;
+volatile unsigned long minimumTime;
 
 // timer overflows (every 65536 counts)
 ISR (TIMER1_OVF_vect)  {
@@ -31,25 +32,33 @@ ISR (TIMER1_CAPT_vect) {
     overflowCopy++;
   
   // wait until we noticed last one
-  if (triggered)
+  if (pulseCount == 0) {
+    TIMSK1 = 0;    // no more interrupts for now
     return;
+  }
 
-  if (first) {
+  if (fallingEdge) {
     startTime = (overflowCopy << 16) + timer1CounterValue;
-    first = false;
+    fallingEdge = false;
     TCCR1B =  bit(CS10) | bit(ICES1); // Trigger on rising edge
     return;  
   }
+  pulseCount -= 1;
+  fallingEdge = true;
+  TCCR1B =  bit(CS10); // Trigger on falling edge
     
   finishTime = (overflowCopy << 16) + timer1CounterValue;
-  triggered = true;
-  TIMSK1 = 0;    // no more interrupts for now
+  unsigned long elapsedTime = finishTime - startTime;
+  if (elapsedTime < minimumTime) {
+    minimumTime = elapsedTime;
+  }
 }  // end of TIMER1_CAPT_vect
   
 void prepareForInterrupts () {
   noInterrupts ();  // protected code
-  first = true;
-  triggered = false;  // re-arm for next time
+  fallingEdge = true;
+  pulseCount = 5;   // measure this many pulses
+  minimumTime = -1;
   // reset Timer 1
   TCCR1A = 0;
   TCCR1B = 0;
@@ -68,7 +77,7 @@ void prepareForInterrupts () {
 
 void setup ()  {
   Serial.begin(115200);       
-  Serial.println("Frequency Counter");
+  Serial.println("Autobaud");
   // set up for interrupts
   prepareForInterrupts ();   
 } // end of setup
@@ -76,21 +85,21 @@ void setup ()  {
 void loop () 
   {
   // wait till we have a reading
-  if (!triggered)
+  if (pulseCount > 0)
     return;
  
   // period is elapsed time
-  unsigned long elapsedTime = finishTime - startTime;
+  unsigned long elapsedTime = minimumTime;
   // frequency is inverse of period, adjusted for clock period
-  float freq = F_CPU / float (elapsedTime);  // each tick is 62.5 ns at 16 MHz
+  unsigned long bps = F_CPU / elapsedTime;  // each tick is 62.5 ns at 16 MHz
   
   Serial.print ("Took: ");
   Serial.print (elapsedTime);
   Serial.print (" counts. ");
 
-  Serial.print ("Frequency: ");
-  Serial.print (freq);
-  Serial.println (" Hz. ");
+  Serial.print ("Baud rate: ");
+  Serial.print (bps);
+  Serial.println (" bps. ");
 
   // so we can read it  
   delay (500);
